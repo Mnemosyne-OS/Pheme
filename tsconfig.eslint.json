@@ -1,0 +1,20 @@
+{
+  /* Lint-only project.
+   *
+   * tsconfig.json deliberately EXCLUDES the tests so shipping does not depend
+   * on vitest being installed. ESLint still needs to type them, and listing
+   * them one glob at a time under `allowDefaultProject` stops working past a
+   * handful of files — it has a match-count ceiling. One config that includes
+   * everything is the honest answer, and it is what `pnpm typecheck` runs. */
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    /* The suite runs with `globals: true`, so `describe`/`it`/`expect`/`vi`
+       are ambient rather than imported. They belong here and nowhere else:
+       the app build must not see them. Naming any type at all switches off
+       the automatic @types pickup — the suite's `__dirname` and `node:fs`
+       keep resolving because vitest's own types pull node's in. */
+    "types": ["vitest/globals"]
+  },
+  "include": ["src", "eslint.config.js", "vite.config.ts"],
+  "exclude": []
+}

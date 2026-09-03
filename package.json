@@ -1,0 +1,40 @@
+{
+  "name": "@mnemosyne-plugins/pheme",
+  "version": "0.9.8",
+  "private": true,
+  "type": "module",
+  "description": "Pheme — reputation coach for Reddit & Hacker News. Scans threads that match your expertise, drafts replies in your voice grounded in your own memory, and coaches your participation ratio. It never posts: you do.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "dev:cartridge": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "posters": "tsx scripts/poster-preview.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.eslint.json",
+    "lint": "eslint src --max-warnings 0",
+    "lint:fix": "eslint src --fix",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mnemosyne_os/cartridge-sdk": "^0.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "eslint": "^9.0.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.5.3",
+    "typescript-eslint": "^8.58.2",
+    "vite": "^5.4.1",
+    "vitest": "^1.6.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Mnemosyne-OS/Pheme"
+  }
+}

@@ -1,0 +1,16 @@
+# Pheme — editor defaults, so a contributor's IDE does not reformat the diff.
+# LF everywhere: the repo normalises on commit (.gitattributes), and a CRLF
+# working copy is what makes `git status` lie about untouched files.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.md]
+# Markdown uses trailing spaces for hard line breaks.
+trim_trailing_whitespace = false
