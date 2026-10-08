@@ -3,6 +3,31 @@
 All notable changes to the Pheme cartridge. The manifest version is the single
 source of truth (`mnemo-plugin.json`), displayed in the footer and Settings.
 
+## [0.11.0] — 2026-10-08
+
+### Changed
+- **The radar opens on the threads worth a reply today.** The default view shows
+  threads that are fresh, unanswered and not hidden. The others are folded under
+  one counter per reason (hidden, replied, stale), one click from being shown
+  again. Nothing is deleted.
+- **One status line above the radar**: the scan's age, the subs covered by this
+  pass, the Mnemosyne pass and the Reddit throttle, each shown only when it was
+  measured. The red banner stays for the one case that asks you to act: a 429
+  stopped the scan before every sub was read.
+
+## [0.10.0] — 2026-09-08
+
+### Added
+- **An agent can edit your watch list through Mnemosyne OS.** When an agent
+  changes the subs or topics Pheme watches, Pheme adopts the change and a line
+  says what changed and which agent made it. An edit made while the window was
+  closed is kept.
+- The radar is shared with agents in a compact form, dated with its scan.
+- The new posts of each sub you declared are watched in the background (up to
+  9 subs).
+
+Needs Mnemosyne OS 1.7.0 or later.
+
 ## [0.9.9] — 2026-10-08
 
 ### Changed

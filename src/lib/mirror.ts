@@ -26,6 +26,13 @@ export const MIRRORED_KEYS = [
   'pheme:diagnoses',
   'pheme:radar:pinned',
   'pheme:presence:seen',
+  // The agent door (lib/agentDoor): the receipts an agent left, and the radar
+  // as projected for agents. The receipts are mirrored so a sync from this
+  // origin carries them forward instead of erasing what the host wrote; the
+  // projection is compact (no bodies) — the reason the full radar cache is
+  // still not here.
+  'pheme:agent',
+  'pheme:radar:agent',
 ] as const;
 
 export type MirrorSnapshot = Record<string, string>;

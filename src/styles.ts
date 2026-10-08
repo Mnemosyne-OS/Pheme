@@ -313,6 +313,10 @@ button { font-family:inherit; }
   border-radius:var(--ph-radius); border:1px solid var(--ph-border); background:var(--ph-panel);
   color:var(--ph-text); font-size:13px; font-family:var(--ph-font); }
 .karma { font-size:12.5px; color:var(--ph-muted); }
+/* One status line. The separator is drawn between segments by CSS so that a
+   segment can be absent without leaving a dangling dot behind it. */
+.statusLine { margin:8px 0 0; font-size:12.5px; color:var(--ph-muted); }
+.statusLine > span + span::before { content:' · '; color:var(--ph-muted); }
 .kindTag { font-size:10px; padding:1px 7px; border-radius:8px; margin-right:6px; font-family:var(--ph-font-tag);
   border:1px solid var(--ph-border); color:var(--ph-text-2); }
 .kindTag.post { color:var(--ph-accent); border-color:color-mix(in srgb, var(--ph-accent) 50%, transparent); }

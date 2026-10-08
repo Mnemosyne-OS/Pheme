@@ -24,6 +24,7 @@ import { NETWORKS } from './lib/networks';
 import { cooldownRemainingMs } from './lib/redditGate';
 import { Onboarding } from './components/Onboarding';
 import { DetailView, RadarTab } from './components/Radar';
+import type { FoldPile } from './lib/radarFolds';
 import { CoachTab } from './components/CoachTab';
 import { PresenceTab } from './components/PresenceTab';
 import { NetProfile } from './components/NetProfile';
@@ -34,6 +35,8 @@ import { unseenByNetwork } from './lib/selectors';
 import type { MnemoTier } from './lib/rank';
 import { loadWatchSignature, saveWatchSignature, watchSignature, watchTargetsFor } from './lib/watch';
 import { hasProfile, localIsBlank, restoreLocal, snapshotLocal } from './lib/mirror';
+import { adoptAgentProfile, isStateChangedMessage, radarProjection, receiptChips, syncMirror, writeRadarProjection, type AgentRecord } from './lib/agentDoor';
+import { loadRank } from './lib/rank';
 import { diagnosisMemory, loadWritten, markWritten, memoryStats, pendingMemories } from './lib/memory';
 
 /** One-shot flag: a mirror restore reloads the app, the notice must outlive it. */
@@ -84,7 +87,9 @@ export default function App() {
   const { pinned, togglePin } = usePinned();
   // Radar filters live HERE: the tab unmounts while a post is open, and a
   // filtered view was silently reset by the trip through a detail page.
-  const [showHidden, setShowHidden] = useState(false);
+  // Empty = the default view: fresh, unanswered, unhidden. The piles a human
+  // has opened are a filter like the others and survive a trip into a post.
+  const [openPiles, setOpenPiles] = useState<FoldPile[]>([]);
   const [tierFilter, setTierFilter] = useState<MnemoTier | 'all'>('all');
   /**
    * Which watched target the radar is narrowed to. Same reason as the two
@@ -276,19 +281,36 @@ export default function App() {
     } catch { /* private mode */ }
     return false;
   });
+  // An agent changed the watch lists through the host (lib/agentDoor): the
+  // human is told what, and the line stays until they close it.
+  const [agentNotice, setAgentNotice] = useState<AgentRecord | null>(null);
   useEffect(() => {
     if (!framed) return;
     let alive = true;
     void (async () => {
       try {
+        // 🚨 Read the mirror BEFORE writing it. An agent may have edited it
+        // while this window was closed (doc 75 §14); syncing the local copy
+        // first would overwrite that edit with the stale profile, and the
+        // agent's receipt with it.
+        const res = await bridge.stateGet();
+        const snap = res?.state?.snapshot;
+        if (!alive) return;
         if (localIsBlank()) {
-          const res = await bridge.stateGet();
-          const snap = res?.state?.snapshot;
-          if (alive && snap && hasProfile(snap) && restoreLocal(snap).length > 0) {
+          if (snap && hasProfile(snap) && restoreLocal(snap).length > 0) {
             try { localStorage.setItem(K_RESTORED, new Date().toISOString()); } catch { /* private mode */ }
             // The whole app derives from these keys at mount; re-reading
             // them piecemeal would leave half the surfaces on stale state.
             window.location.reload();
+            return;
+          }
+        } else if (snap) {
+          const adopted = adoptAgentProfile(snap);
+          if (adopted) {
+            // The profile change re-runs this effect, which then syncs the
+            // adopted state (receipt included) back to the mirror.
+            setProfile(adopted.profile);
+            setAgentNotice(adopted.record);
             return;
           }
         }
@@ -296,8 +318,31 @@ export default function App() {
       } catch { /* capability absent or declined — localStorage still works */ }
     })();
     return () => { alive = false; };
-     
-  }, [framed, profile, ledger.length]);
+  }, [framed, profile, ledger.length, setProfile]);
+
+  // The host's nudge while this window is OPEN: the mirror moved under us.
+  // Only the host's message counts (source === parent); anything else is
+  // ignored, and the data is never taken from the event — the mirror is
+  // re-read through the bridge like on mount.
+  useEffect(() => {
+    if (!framed) return;
+    let alive = true;
+    const onMessage = (ev: MessageEvent) => {
+      if (!isStateChangedMessage(ev)) return;
+      void (async () => {
+        try {
+          const res = await bridge.stateGet();
+          const adopted = adoptAgentProfile(res?.state?.snapshot);
+          if (adopted && alive) {
+            setProfile(adopted.profile);
+            setAgentNotice(adopted.record);
+          }
+        } catch { /* the next mount adopts the same record */ }
+      })();
+    };
+    window.addEventListener('message', onMessage);
+    return () => { alive = false; window.removeEventListener('message', onMessage); };
+  }, [framed, setProfile]);
 
   /**
    * Hand the host what to watch while this window is closed (doc 72), and
@@ -329,7 +374,7 @@ export default function App() {
     })();
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- config identity, not object identity
-  }, [framed, reddit.handle, hn.handle, reddit.home, profile.presenceAutoMin]);
+  }, [framed, reddit.handle, hn.handle, reddit.home, reddit.targets.join('|'), profile.presenceAutoMin]);
 
   // The timer must call the CURRENT refresh, not the one captured when it
   // was armed: with the closure, renaming a pseudonym left the timer
@@ -373,7 +418,12 @@ export default function App() {
         .map(i => i.id));
       const merged = mergeScan(items, scored, okTargets, retainIds).sort((a, b) => b.score - a.score);
       setItems(merged);
-      setScannedAt(saveRadarCache(merged).at);
+      const cached = saveRadarCache(merged);
+      setScannedAt(cached.at);
+      // The compact copy an agent reads (lib/agentDoor) — dated with THIS
+      // scan, carrying the tiers of the last Mnemosyne pass.
+      writeRadarProjection(radarProjection(merged, loadRank(), hidden, { failed: bad, scannedAt: cached.at }));
+      void syncMirror();
     } finally {
       setScanning(false);
     }
@@ -508,6 +558,14 @@ export default function App() {
           <button className="mini" style={{ marginLeft: 10 }} onClick={() => setRestoredNotice(false)}>×</button>
         </p>
       )}
+      {agentNotice && (
+        <p className="cooldownOver" style={{ margin: '8px 18px 0' }}>
+          ✓ {t('agentChanged')} {receiptChips(agentNotice).join(' · ')}
+          {agentNotice.receipts[agentNotice.receipts.length - 1]?.byName
+            ? ` (${agentNotice.receipts[agentNotice.receipts.length - 1].byName})` : ''}
+          <button className="mini" style={{ marginLeft: 10 }} onClick={() => setAgentNotice(null)}>×</button>
+        </p>
+      )}
       {/* The selected network's own functions. Hidden on a first visit: there
           is nothing to look at until the network knows who you are there. */}
       {subTabs.length > 0 && !netFirstRun && (
@@ -604,7 +662,7 @@ export default function App() {
           scannedAt={scannedAt} hidden={hidden} onHide={hide} onUnhideAll={unhideAll}
           repliedUrls={repliedUrls} netFilter={repNet} subsCovered={subsCovered}
           pinned={pinned} onTogglePin={togglePin}
-          showHidden={showHidden} onShowHidden={setShowHidden}
+          openPiles={openPiles} onOpenPiles={setOpenPiles}
           tierFilter={tierFilter} onTierFilter={setTierFilter}
           targets={repNet === 'reddit' ? reddit.targets : hn.targets}
           subFilter={subFilter} onSubFilter={setSubFilter}

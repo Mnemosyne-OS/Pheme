@@ -8,11 +8,17 @@ import { draftedIds, followRefOf, loadTranslation, saveTranslation } from '../li
 import { sortedTargets, targetLabel } from '../lib/selectors';
 import { buildRankPrompt, loadRank, parseRank, saveRank, MNEMO_TIERS, RANK_MAX, type MnemoTier, type RankMap } from '../lib/rank';
 import { AVAILABLE_LANGS, LANG_NAME, type Lang, type StringKey } from '../lib/i18n';
+import { radarProjection, syncMirror, writeRadarProjection } from '../lib/agentDoor';
+import { FOLD_PILES, partitionFolds, type FoldContext, type FoldPile } from '../lib/radarFolds';
 import { age, mmss, useCooldownClock, type T } from './shared';
 import { DraftStudio } from './DraftStudio';
 import type { MbtiType } from '../lib/archetypes';
 
 const TIER_LABEL: Record<MnemoTier, StringKey> = { high: 'tierHigh', mid: 'tierMid', low: 'tierLow' };
+
+const PILE_LABEL: Record<FoldPile, StringKey> = {
+  hidden: 'pileHidden', replied: 'pileReplied', stale: 'pileStale',
+};
 
 /** Each way a link post can fail to be readable says something different. */
 const ARTICLE_FAIL: Record<ArticleFail, StringKey> = {
@@ -22,7 +28,7 @@ const ARTICLE_FAIL: Record<ArticleFail, StringKey> = {
   unreachable: 'articleUnreachable',
 };
 
-export function RadarTab({ t, framed, items, topics, scanning, failed, uncovered, rateLimited, scannedAt, hidden, repliedUrls, netFilter, subsCovered, pinned, onTogglePin, showHidden, onShowHidden, tierFilter, onTierFilter, targets, subFilter, onSubFilter, onHide, onUnhideAll, onScan, onOpenDetail }: {
+export function RadarTab({ t, framed, items, topics, scanning, failed, uncovered, rateLimited, scannedAt, hidden, repliedUrls, netFilter, subsCovered, pinned, onTogglePin, openPiles, onOpenPiles, tierFilter, onTierFilter, targets, subFilter, onSubFilter, onHide, onUnhideAll, onScan, onOpenDetail }: {
   t: T; framed: boolean; items: ScoredItem[]; topics: string[]; scanning: boolean; failed: string[]; rateLimited: boolean;
   scannedAt: string | null; hidden: string[]; repliedUrls: Set<string>;
   /** v2: set by a network board — the tab shows ONE network, no picker. */
@@ -39,9 +45,12 @@ export function RadarTab({ t, framed, items, topics, scanning, failed, uncovered
   /** Pinned = survives every rescan until unpinned. */
   pinned: string[];
   onTogglePin: (id: string) => void;
-  /** Filters are owned by App so a trip into a post does not reset them. */
-  showHidden: boolean;
-  onShowHidden: (v: boolean) => void;
+  /**
+   * Filters are owned by App so a trip into a post does not reset them.
+   * Which folded piles are currently unfolded — empty is the default view.
+   */
+  openPiles: FoldPile[];
+  onOpenPiles: (v: FoldPile[]) => void;
   tierFilter: MnemoTier | 'all';
   onTierFilter: (v: MnemoTier | 'all') => void;
   /** This network's watch list — the sub filter's chips come from it. */
@@ -72,20 +81,41 @@ export function RadarTab({ t, framed, items, topics, scanning, failed, uncovered
   const [rankError, setRankError] = useState<string | null>(null);
   const tierOf = (id: string): MnemoTier | null => rank?.tiers[id]?.tier ?? null;
 
+  /** `r/Foo` and `Foo` are the same target — the same rule the board uses. */
+  const onTarget = (i: ScoredItem) =>
+    !subFilter || i.target.toLowerCase() === targetLabel(activeNet, subFilter).toLowerCase();
+
+  /**
+   * The board, before folding: this network, this sub. The folds are computed
+   * on THIS set and not on the tier-filtered one, so the "212 folded" line is
+   * a statement about the board and does not jump around when a tier chip is
+   * clicked — the tier chips say for themselves what they are hiding.
+   */
+  const netScoped = items
+    .filter(i => activeNet === 'all' || i.network === activeNet)
+    .filter(onTarget);
+  const foldCtx: FoldContext = { hidden, repliedUrls, drafted };
+  const openSet = useMemo(() => new Set<FoldPile>(openPiles), [openPiles]);
+  const folds = partitionFolds(netScoped, foldCtx, openSet);
+  const visible = folds.visible.filter(i => tierFilter === 'all' || tierOf(i.id) === tierFilter);
+  const anyFoldable = FOLD_PILES.some(p => folds.counts[p] > 0);
+  const togglePile = (p: FoldPile) =>
+    onOpenPiles(openPiles.includes(p) ? openPiles.filter(x => x !== p) : [...openPiles, p]);
+
   const runPass = async () => {
-    if (rankBusy || !framed || visible.length === 0) return;
+    if (rankBusy || !framed || folds.visible.length === 0) return;
     setRankBusy(true);
     setRankError(null);
     try {
       // Rank what this board SHOWS: on a scoped board the global list made
       // the call pay to classify threads the user cannot see here.
       // The sub filter counts as part of "what this board shows": filtered to
-      // one sub, the pass should not pay to classify the other twenty. The
-      // TIER filter deliberately does not — you run the pass to obtain tiers,
-      // so filtering on them first would be circular.
-      const scoped = items
-        .filter(i => activeNet === 'all' || i.network === activeNet)
-        .filter(onTarget);
+      // one sub, the pass should not pay to classify the other twenty. So do
+      // the folds — paying a model to rank a month-old finished thread is the
+      // "8 of 307 ranked" the default view exists to stop. The TIER filter
+      // deliberately does not — you run the pass to obtain tiers, so
+      // filtering on them first would be circular.
+      const scoped = folds.visible;
       const raw = inferText(await bridge.ask(buildRankPrompt(scoped, topics), { task: 'rank', net: netFilter }));
       const parsed = parseRank(raw, scoped);
       // Merge: a pass on one board must not erase the other board's tiers.
@@ -93,28 +123,54 @@ export function RadarTab({ t, framed, items, topics, scanning, failed, uncovered
         const merged = { at: parsed.at, tiers: { ...(rank?.tiers ?? {}), ...parsed.tiers } };
         setRank(merged);
         saveRank(merged);
+        // The tiers reach the agent's copy of the radar (lib/agentDoor) at
+        // the moment they exist, not at the next scan.
+        writeRadarProjection(radarProjection(items, merged, hidden, { failed, ...(scannedAt ? { scannedAt } : {}) }));
+        void syncMirror();
       } else setRankError(t('suggestEmpty'));
     } catch (e) {
       setRankError(String(e instanceof Error ? e.message : e));
     } finally { setRankBusy(false); }
   };
 
-  /** `r/Foo` and `Foo` are the same target — the same rule the board uses. */
-  const onTarget = (i: ScoredItem) =>
-    !subFilter || i.target.toLowerCase() === targetLabel(activeNet, subFilter).toLowerCase();
-  const visible = items
-    .filter(i => activeNet === 'all' || i.network === activeNet)
-    .filter(onTarget)
-    .filter(i => showHidden || !hidden.includes(i.id))
-    .filter(i => tierFilter === 'all' || tierOf(i.id) === tierFilter);
-  // Scoped like the grid: a "3 hidden" button on the HN board that reveals
-  // three Reddit posts is a door to nowhere.
-  const hiddenCount = items.filter(i =>
-    (activeNet === 'all' || i.network === activeNet) && hidden.includes(i.id)).length;
   // A scoped board only reports ITS network's failures — reddit labels are
   // "r/<sub>", HN labels are "HN:<query>".
   const visibleFailed = !netFilter ? failed
     : failed.filter(f => netFilter === 'reddit' ? f.startsWith('r/') : f.startsWith('HN'));
+
+  /**
+   * ONE status line (§15.2 D). The scan's age, the sub coverage, the pass's
+   * age and the Reddit throttle were three surfaces born at three moments,
+   * stacked above the content and each shouting at the same volume.
+   *
+   * 🎭 Every segment is a MEASURED fact or absent. No throttle prints no
+   * segment — never an "OK"; a pass that never ran says nothing rather than
+   * "0 ranked"; a scan that never happened prints no age.
+   */
+  const passStale = !!(rank && scannedAt && rank.at < scannedAt);
+  const statusBits: { key: string; text: string; warn?: boolean; title?: string }[] = [];
+  if (scannedAt) statusBits.push({ key: 'scan', text: `${t('scannedAgo')} ${age(scannedAt)}` });
+  if (netFilter !== 'hackernews' && subsCovered && subsCovered.total > 0) {
+    statusBits.push({
+      key: 'subs',
+      text: `${subsCovered.ok}/${subsCovered.total} ${t('subsCovered')}`,
+      title: t('subsCoveredHint'),
+    });
+  }
+  if (rank) {
+    statusBits.push({
+      key: 'pass',
+      // Counted over what this board shows — a stored map can outlive the
+      // items it ranked, and "30/12 ranked" is not a fact.
+      text: `Φ ${age(rank.at)} · ${visible.filter(i => rank.tiers[i.id]).length}/${visible.length} ${t('rankedLabel')}`,
+      ...(passStale ? { warn: true, title: t('passStale') } : {}),
+    });
+  }
+  // The clock is a fact and belongs on the line. Whether the human has to DO
+  // something about it is a different question, answered by the banner below.
+  if (netFilter !== 'hackernews' && coolSecs > 0) {
+    statusBits.push({ key: 'cool', text: `${t('throttleLeft')} ⏳ ${mmss(coolSecs)}`, warn: true });
+  }
 
   return (
     <div className="pane wide">
@@ -124,14 +180,6 @@ export function RadarTab({ t, framed, items, topics, scanning, failed, uncovered
         <button className="primary" onClick={onScan} disabled={scanning || !framed}>
           {scanning ? t('scanning') : t('scan')}
         </button>
-        {scannedAt && (
-          <span className="karma" title={t('subsCoveredHint')}>
-            {t('scannedAgo')} {age(scannedAt)}
-            {netFilter !== 'hackernews' && subsCovered && subsCovered.total > 0
-              ? ` · ${subsCovered.ok}/${subsCovered.total} ${t('subsCovered')}`
-              : ''}
-          </span>
-        )}
         <span className="spacer" />
         {!netFilter && (
           <span className="filters">
@@ -144,15 +192,38 @@ export function RadarTab({ t, framed, items, topics, scanning, failed, uncovered
             ))}
           </span>
         )}
-        {hiddenCount > 0 && (
-          <button className="fchip" onClick={() => onShowHidden(!showHidden)}>
-            {showHidden ? `${hiddenCount} ${t('hiddenLabel')}` : t('showHidden')}
-          </button>
-        )}
-        {hiddenCount > 0 && showHidden && (
-          <button className="fchip" onClick={onUnhideAll}>×0</button>
-        )}
       </div>
+
+      {statusBits.length > 0 && (
+        <p className="statusLine">
+          {statusBits.map(b => (
+            <span key={b.key} className={b.warn ? 'warn' : undefined} title={b.title}>{b.text}</span>
+          ))}
+        </p>
+      )}
+
+      {/* What the default view folds away, and the way back to each pile.
+          Nothing is lost — `mergeScan` still retains every touched thread —
+          but the grid now answers "where do I have something to say today?"
+          instead of "what did the scan bring back?".
+          🎭 Every number here is counted. There is no "and others", and an
+          empty pile shows no chip rather than a 0 that opens onto nothing. */}
+      {anyFoldable && (
+        <div className="filters">
+          {folds.folded > 0 && (
+            <span className="karma">{folds.folded} {t('foldedLabel')}</span>
+          )}
+          {FOLD_PILES.filter(p => folds.counts[p] > 0).map(p => (
+            <button key={p} className={openPiles.includes(p) ? 'fchip on' : 'fchip'}
+              onClick={() => togglePile(p)}>
+              {folds.counts[p]} {t(PILE_LABEL[p])}
+            </button>
+          ))}
+          {openPiles.includes('hidden') && folds.counts.hidden > 0 && (
+            <button className="fchip" onClick={onUnhideAll}>×0 {t('unhideAllBtn')}</button>
+          )}
+        </div>
+      )}
 
       {/* Narrow the grid to ONE watched target, without leaving for the board.
           The radar had no such filter at all: on a dozen subs the only way to
@@ -183,22 +254,15 @@ export function RadarTab({ t, framed, items, topics, scanning, failed, uncovered
       )}
 
       <div className="toolbar">
+        {/* Disabled on what the pass would ACTUALLY send, not on the grid:
+            with a tier chip active the grid can be empty while there is still
+            a boardful of unranked threads to classify. */}
         <button className="mini mnemoBtn" onClick={runPass}
-          disabled={rankBusy || !framed || visible.length === 0}>
+          disabled={rankBusy || !framed || folds.visible.length === 0}>
           {rankBusy ? t('mnemoPassing') : `Φ ${t('mnemoPass')}`}
         </button>
-        {rank && (
-          <span className="karma">
-            {/* Counted over what this board shows — a stored map can outlive
-                the items it ranked, and "30/12 ranked" is not a fact. */}
-            Φ · {age(rank.at)} · {visible.filter(i => rank.tiers[i.id]).length}/{visible.length} {t('rankedLabel')}
-          </span>
-        )}
         {rankError && <span className="warn small">{rankError}</span>}
         {!rank && items.length > RANK_MAX && <span className="karma">{t('mnemoPassCap')} {RANK_MAX}</span>}
-        {rank && scannedAt && rank.at < scannedAt && (
-          <span className="warn small">{t('passStale')}</span>
-        )}
         {rank && (
           <span className="filters">
             <button className={tierFilter === 'all' ? 'fchip on' : 'fchip'} onClick={() => onTierFilter('all')}>
@@ -213,13 +277,17 @@ export function RadarTab({ t, framed, items, topics, scanning, failed, uncovered
           </span>
         )}
       </div>
-      {/* The throttle is a Reddit affair — the HN board has no business showing it. */}
-      {netFilter !== 'hackernews' && (
-        coolSecs > 0 ? (
-          <p className="notice">{t('rateLimitedMsg')} · ⏳ {mmss(coolSecs)}</p>
-        ) : rateLimited ? (
-          <p className="cooldownOver">✓ {t('cooldownOver')}</p>
-        ) : null
+      {/* The throttle is a Reddit affair — the HN board has no business showing it.
+          The loud banner is kept for the ONE case where the throttle changes
+          what the human has to do: it cut this scan short, so subs went
+          unasked and a refresh is owed once it clears. A throttle that is
+          merely running (tripped by another surface) is a fact, and facts
+          live on the status line above — a red box for it would be shouting
+          about something nobody has to act on. */}
+      {netFilter !== 'hackernews' && rateLimited && (
+        coolSecs > 0
+          ? <p className="notice">{t('scanCutShort')}</p>
+          : <p className="cooldownOver">✓ {t('cooldownOver')}</p>
       )}
       {visibleFailed.length > 0 && <p className="notice">{t('failedTargets')} {visibleFailed.join(', ')}</p>}
       {/* Different sentence, because it is a different fact: these were asked

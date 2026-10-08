@@ -1,8 +1,14 @@
 {
   "name": "@mnemosyne-plugins/pheme",
   "displayName": "Pheme",
-  "version": "0.9.9",
-  "keywords": ["reddit", "hacker news", "reputation", "replies", "community"],
+  "version": "0.11.0",
+  "keywords": [
+    "reddit",
+    "hacker news",
+    "reputation",
+    "replies",
+    "community"
+  ],
   "description": "Reputation coach for Reddit & Hacker News. Pheme scans threads that match your expertise, drafts 2-3 possible replies in distinct cognitive voices — grounded in your own memory — and coaches your participation rhythm. It never posts anything: you always do.",
   "category": "Productivity",
   "permissions": [
