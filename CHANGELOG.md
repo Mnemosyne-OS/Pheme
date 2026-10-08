@@ -3,6 +3,13 @@
 All notable changes to the Pheme cartridge. The manifest version is the single
 source of truth (`mnemo-plugin.json`), displayed in the footer and Settings.
 
+## [0.9.9] — 2026-10-08
+
+### Changed
+- **Manifest only, no code change.** Pheme now declares keywords, so Mnemosyne
+  OS can propose it when someone describes what they want instead of typing its
+  name.
+
 ## [0.9.8] — 2026-08-08
 
 ### Added

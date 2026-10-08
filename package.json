@@ -1,6 +1,6 @@
 {
   "name": "@mnemosyne-plugins/pheme",
-  "version": "0.9.8",
+  "version": "0.9.9",
   "private": true,
   "type": "module",
   "description": "Pheme — reputation coach for Reddit & Hacker News. Scans threads that match your expertise, drafts replies in your voice grounded in your own memory, and coaches your participation ratio. It never posts: you do.",
