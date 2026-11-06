@@ -3,6 +3,13 @@
 All notable changes to the Pheme cartridge. The manifest version is the single
 source of truth (`mnemo-plugin.json`), displayed in the footer and Settings.
 
+## [0.11.1] — 2026-11-05
+
+### Fixed
+- Pheme speaks with the voice engine the host names (Qwen3-TTS, Chatterbox…),
+  instead of falling back to Piper for anything that was not XTTS.
+- The manifest points at the icon the cartridge already ships.
+
 ## [0.11.0] — 2026-10-08
 
 ### Changed

@@ -21,8 +21,23 @@ let current: AudioBufferSourceNode | null = null;
 /** Bumped on every stop/start — an old playback loop sees it and dies. */
 let generation = 0;
 
-interface VoiceConfig { engine: 'piper' | 'xtts' | 'browser'; voice: string; speed: number }
+/** `engine` is the host's own id ('piper', 'qwen3', 'chatterbox', …) or 'browser'. */
+interface VoiceConfig { engine: string; voice: string; speed: number }
 let cachedCfg: VoiceConfig | null = null;
+
+/**
+ * The engine to speak with, as the host named it.
+ *
+ * 🚨 This used to read `engine === 'xtts' ? 'xtts' : 'piper'`: every engine the
+ * host added after XTTS became Piper here, so a person who chose Qwen3-TTS or
+ * Chatterbox heard a stock voice in Pheme, and XTTS itself left the host on
+ * 2026-10-27 (doc 31 §13.6). The host's registry decides which engines exist,
+ * and `reader.ttsSpeak` refuses one it does not know by name. Only an absent
+ * or empty answer falls back to Piper.
+ */
+export function engineFromHost(raw: unknown): string {
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : 'piper';
+}
 
 /** The user's configured voice, from the host. Cached for the session. */
 async function voiceConfig(): Promise<VoiceConfig> {
@@ -30,7 +45,7 @@ async function voiceConfig(): Promise<VoiceConfig> {
   try {
     const c = await sdk.invoke<Partial<VoiceConfig>>('reader.voiceConfig');
     cachedCfg = {
-      engine: c?.engine === 'xtts' || c?.engine === 'browser' ? c.engine : 'piper',
+      engine: engineFromHost(c?.engine),
       voice: typeof c?.voice === 'string' ? c.voice : '',
       speed: typeof c?.speed === 'number' && c.speed > 0 ? c.speed : 1,
     };
